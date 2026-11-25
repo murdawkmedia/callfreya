@@ -23,54 +23,64 @@ li { margin-bottom: .6rem }
 <body>
 <main>
 <h1><img src="/callfreya-logo.png" alt="CallFreya Business Receptionist" width="1254" height="1254"></h1>
-<p>Run a local voice call and review the transcript and outcome. Upload a reply or record up to 15 seconds.</p>
+<nav><a href="/workspace">Reception workspace</a> · <a href="/demo">Product demo</a></nav>
+<p>Run a local voice call and review the transcript and outcome. Start a call, then upload or record each reply.</p>
 <div class="controls">
-<button id="greet">Play greeting</button>
-<button id="record">Record reply</button>
+<button id="greet">Start call</button>
+<button id="record" disabled>Record reply</button>
 <button id="stop" disabled>Stop recording</button>
 </div>
 <label for="upload">Or choose a reply audio file</label>
-<input id="upload" type="file" accept="audio/*">
+<input id="upload" type="file" accept="audio/*" disabled>
 <p id="status" role="status">Ready</p>
 <audio id="audio" controls aria-label="Freya’s audio"></audio>
 <section id="results" hidden>
-<h2>Call result</h2>
+<h2>Call transcript</h2>
 <p id="outcome"></p>
 <ol id="transcript"></ol>
+<p id="follow-up" hidden><a href="/demo">View the demo</a> · <a href="/workspace#bookings">Request an appointment</a></p>
+<p id="handoff" hidden><a href="/workspace#handoffs">Request human follow-up</a></p>
 </section>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 let recorder, stream, timer;
+let sessionId;
 async function request(url, body) {
-  const response = await fetch(url, body ? {method: 'POST', headers: {'X-FreyaLine-Call': '1'}, body} : {});
+  const response = await fetch(url, {
+    method: 'POST', headers: {'X-FreyaLine-Call': '1'}, body
+  });
+  if (response.status === 404) sessionId = undefined;
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
-function play(audio) {
-  $('audio').src = audio;
+function show(result) {
+  sessionId = result.outcome === 'in_progress' ? result.id : undefined;
+  $('outcome').textContent = {
+    in_progress: 'In progress', interested: 'Interested in a demo',
+    declined: 'Declined', needs_review: 'Needs review'
+  }[result.outcome];
+  $('transcript').replaceChildren(...result.transcript.map(turn => {
+    const item = document.createElement('li');
+    item.textContent = `${turn.speaker === 'agent' ? 'Freya' : 'Caller'}: ${turn.text}`;
+    return item;
+  }));
+  $('results').hidden = false;
+  $('follow-up').hidden = result.outcome !== 'interested';
+  $('handoff').hidden = result.outcome !== 'interested' && result.outcome !== 'needs_review';
+  $('status').textContent = sessionId ? 'Ready for your reply.' : 'Call complete.';
+  $('audio').src = result.audio;
   $('audio').play().catch(() => {});
 }
 function busy(value) {
-  for (const id of ['greet', 'record', 'upload']) $(id).disabled = value;
+  $('greet').disabled = value;
+  $('record').disabled = $('upload').disabled = value || !sessionId;
 }
 async function submit(blob) {
   busy(true);
-  $('results').hidden = true;
   $('status').textContent = 'Transcribing locally…';
   try {
-    const result = await request('/api/call', blob);
-    $('outcome').textContent = {
-      interested: 'Interested in a demo', declined: 'Declined', needs_review: 'Needs review'
-    }[result.outcome];
-    $('transcript').replaceChildren(...result.transcript.map(turn => {
-      const item = document.createElement('li');
-      item.textContent = `${turn.speaker === 'agent' ? 'Freya' : 'Caller'}: ${turn.text}`;
-      return item;
-    }));
-    $('results').hidden = false;
-    $('status').textContent = 'Call complete.';
-    play(result.audio);
+    show(await request(`/api/sessions/${sessionId}/turn`, blob));
   } catch (error) {
     $('status').textContent = error.message;
   } finally { busy(false); }
@@ -78,9 +88,7 @@ async function submit(blob) {
 $('greet').onclick = async () => {
   busy(true);
   try {
-    const result = await request('/api/greeting');
-    $('status').textContent = result.text;
-    play(result.audio);
+    show(await request('/api/sessions'));
   } catch (error) { $('status').textContent = error.message; }
   finally { busy(false); }
 };

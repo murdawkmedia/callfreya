@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CallFreya product demo</title>
+<style>
+body { margin: 0; background: #eeede7; color: #222922; font: 1rem/1.55 system-ui, sans-serif }
+main { max-width: 42rem; margin: 2rem auto; padding: 1.5rem }
+a { color: #31504a }
+section { padding: 1.25rem; background: #fffcf4; border: 1px solid #d0cec3; border-radius: 1rem }
+button { padding: .5rem .75rem; border: 0; border-radius: .35rem; background: #31504a; color: white; font: inherit }
+button:disabled { opacity: .55 }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-top: 1rem }
+</style>
+</head>
+<body>
+<main>
+<nav><a href="/">CallFreya</a> · <a href="/workspace">Reception workspace</a></nav>
+<h1>Example product demo</h1>
+<p id="intro" role="status">Loading walkthrough…</p>
+<section aria-live="polite">
+<h2 id="step-title"></h2>
+<p id="step-copy"></p>
+</section>
+<div class="controls">
+<button id="previous" disabled>Back</button>
+<span id="progress"></span>
+<button id="next" disabled>Next</button>
+<a href="/workspace#bookings">Request a demo appointment</a>
+</div>
+</main>
+<script>
+let steps;
+let step = 0;
+const $ = id => document.getElementById(id);
+function show() {
+  $('step-title').textContent = steps[step].title;
+  $('step-copy').textContent = steps[step].body;
+  $('progress').textContent = (step + 1) + ' of ' + steps.length;
+  $('previous').disabled = step === 0;
+  $('next').disabled = step === steps.length - 1;
+}
+$('previous').onclick = () => { step--; show(); };
+$('next').onclick = () => { step++; show(); };
+async function load() {
+  const response = await fetch('/api/demo');
+  if (!response.ok) throw new Error('Unable to load the walkthrough.');
+  const demo = await response.json();
+  $('intro').textContent = demo.intro;
+  steps = demo.steps;
+  show();
+}
+load().catch(error => { $('intro').textContent = error.message; });
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "product": "Harbor Desk",
+  "intro": "A sample walkthrough for Harbor Desk, a fictional appointment tool.",
+  "steps": [
+    {"title": "Set availability", "body": "Harbor Desk shows visitors the times your team has set aside for appointments."},
+    {"title": "Collect the request", "body": "A visitor picks a time and leaves an email for a reply. Your receptionist can see the request before confirming it."},
+    {"title": "Review follow-ups", "body": "The team sees confirmed appointments and open questions in one place. Try both with synthetic contacts in the CallFreya reception workspace."}
+  ]
+}
