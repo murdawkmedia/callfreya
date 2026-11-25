@@ -1,4 +1,8 @@
 mod campaign;
+mod demo;
+mod hermes;
+mod session;
+mod workspace;
 
 use axum::{
     Json, Router,
@@ -10,7 +14,13 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
-use std::{env, io, os::unix::fs::PermissionsExt, path::Path, sync::Arc, time::Duration};
+use std::{
+    env, io,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{process::Command, sync::Semaphore, time::timeout};
 
 const GREETING: &str = "Hi, I'm Freya, a demo voice agent. Are you interested in a product demo?";
@@ -22,6 +32,10 @@ struct Speech {
     config: String,
     synthesizer: String,
     inference_slot: Arc<Semaphore>,
+    sessions: session::Sessions,
+    workspace: workspace::Workspace,
+    hermes: Option<hermes::Hermes>,
+    demo: demo::Demo,
 }
 
 #[derive(Serialize)]
@@ -38,11 +52,20 @@ struct Greeting {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let workspace_path = match env::var_os("CALLFREYA_WORKSPACE") {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(env::var_os("HOME").ok_or("Set CALLFREYA_WORKSPACE or HOME")?)
+            .join(".local/share/freyaline/workspace.json"),
+    };
     let speech = Speech {
         transcriber: env::var("FREYALINE_ASR")?,
         config: env::var("FREYALINE_ASR_CONFIG")?,
         synthesizer: env::var("FREYALINE_TTS").unwrap_or_else(|_| "espeak-ng".into()),
         inference_slot: Arc::new(Semaphore::new(1)),
+        sessions: session::Sessions::default(),
+        workspace: workspace::Workspace::open(workspace_path)?,
+        hermes: hermes::Hermes::from_env()?,
+        demo: demo::Demo::load()?,
     };
     let app = Router::new()
         .route("/", get(|| async { Html(include_str!("index.html")) }))
@@ -57,7 +80,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/greeting", get(greeting))
         .route("/api/call", post(call))
+        .route("/api/sessions", post(session::start))
+        .route("/api/sessions/{id}/turn", post(session::turn))
         .route("/api/campaigns/preview", post(campaign::preview))
+        .route(
+            "/workspace",
+            get(|| async { Html(include_str!("workspace.html")) }),
+        )
+        .route("/demo", get(|| async { Html(include_str!("demo.html")) }))
+        .route("/api/workspace", get(workspace::list))
+        .route("/api/hermes/draft", post(hermes::draft))
+        .route("/api/demo", get(demo::content))
+        .route("/api/workspace/bookings", post(workspace::book))
+        .route(
+            "/api/workspace/bookings/{id}/confirm",
+            post(workspace::confirm),
+        )
+        .route("/api/workspace/handoffs", post(workspace::handoff))
+        .route(
+            "/api/workspace/handoffs/{id}/resolve",
+            post(workspace::resolve),
+        )
+        .route("/api/workspace/export.csv", get(workspace::export))
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
         .with_state(speech);
     let port: u16 = env::var("FREYALINE_PORT")
@@ -83,12 +127,33 @@ async fn call(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, Failure> {
+    require_call_header(&headers)?;
+    let heard = transcribe(&speech, body).await?;
+    let (outcome, reply) = respond(&heard);
+    let work = tempfile::tempdir().map_err(unavailable)?;
+    let audio = speak(&speech, work.path(), reply).await?;
+    Ok(Json(serde_json::json!({
+        "audio": audio,
+        "transcript": [
+            Turn { speaker: "agent", text: GREETING },
+            Turn { speaker: "caller", text: &heard },
+            Turn { speaker: "agent", text: reply }
+        ],
+        "outcome": outcome
+    })))
+}
+
+fn require_call_header(headers: &HeaderMap) -> Result<(), Failure> {
     if headers
         .get("x-freyaline-call")
         .is_none_or(|value| value != "1")
     {
         return Err((StatusCode::FORBIDDEN, "Missing call request header."));
     }
+    Ok(())
+}
+
+async fn transcribe(speech: &Speech, body: Bytes) -> Result<String, Failure> {
     let _permit = speech.inference_slot.try_acquire().map_err(|_| {
         (
             StatusCode::TOO_MANY_REQUESTS,
@@ -165,17 +230,7 @@ async fn call(
             "No speech recognized. Please try again.",
         ));
     }
-    let (outcome, reply) = respond(heard);
-    let audio = speak(&speech, work.path(), reply).await?;
-    Ok(Json(serde_json::json!({
-        "audio": audio,
-        "transcript": [
-            Turn { speaker: "agent", text: GREETING },
-            Turn { speaker: "caller", text: heard },
-            Turn { speaker: "agent", text: reply }
-        ],
-        "outcome": outcome
-    })))
+    Ok(heard.to_owned())
 }
 
 fn respond(heard: &str) -> (&'static str, &'static str) {

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CallFreya workspace</title>
+<style>
+* { box-sizing: border-box }
+body { margin: 0; background: #eeede7; color: #222922; font: 1rem/1.5 system-ui, sans-serif }
+main { max-width: 58rem; margin: 2rem auto; padding: 1.5rem }
+a { color: #31504a }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem }
+section { padding: 1.25rem; background: #fffcf4; border: 1px solid #d0cec3; border-radius: 1rem }
+h2 { margin-top: 0 }
+label { display: block; margin-bottom: .65rem }
+input { display: block; width: 100%; padding: .45rem; font: inherit }
+button { padding: .5rem .75rem; border: 0; border-radius: .35rem; background: #31504a; color: white; font: inherit }
+li { margin-bottom: .8rem; overflow-wrap: anywhere }
+li button { display: block; margin-top: .4rem }
+</style>
+</head>
+<body>
+<main>
+<nav><a href="/">CallFreya</a> · <a href="/demo">Product demo</a></nav>
+<h1>Reception workspace</h1>
+<p>Review local appointment requests and follow-ups. Use synthetic contact details for testing.</p>
+<button id="export">Download CRM CSV</button>
+<p id="status" role="status">Loading…</p>
+<div class="cards">
+<section>
+<h2>Bookings</h2>
+<form id="bookings">
+<label>Name <input name="name" maxlength="120" required></label>
+<label>Email <input name="email" type="email" maxlength="254" required></label>
+<label>Preferred time (your local time) <input name="slot" type="datetime-local" required></label>
+<button>Request 30-minute appointment</button>
+</form>
+<ul id="booking-list"></ul>
+</section>
+<section>
+<h2>Human handoffs</h2>
+<form id="handoffs">
+<label>Name <input name="name" maxlength="120" required></label>
+<label>Email <input name="email" type="email" maxlength="254" required></label>
+<label>Reason for follow-up <input name="reason" maxlength="500" required></label>
+<button>Queue follow-up</button>
+</form>
+<ul id="handoff-list"></ul>
+</section>
+</div>
+<details>
+<summary>Hermes draft assistant</summary>
+<p>Try a fictional scenario. The draft stays here until you copy it.</p>
+<form id="hermes">
+<label>Scenario
+<select name="scenario">
+<option value="demo_followup">Demo follow-up</option>
+<option value="appointment_request">Appointment acknowledgment</option>
+<option value="human_handoff">Human handoff note</option>
+</select>
+</label>
+<button>Generate draft</button>
+</form>
+<p id="draft" role="status" style="white-space: pre-wrap"></p>
+</details>
+</main>
+<script>
+const base = '/api/workspace';
+const $ = id => document.getElementById(id);
+async function request(path, data) {
+  const options = {headers: {'X-FreyaLine-Call': '1'}, cache: 'no-store'};
+  if (data) {
+    options.method = 'POST';
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(data);
+  }
+  const response = await fetch(base + path, options);
+  if (!response.ok) throw new Error(await response.text());
+  return response;
+}
+function render(id, rows, describe, action, target) {
+  $(id).replaceChildren(...rows.map(row => {
+    const item = document.createElement('li');
+    item.textContent = describe(row);
+    if (action && (row.status === 'requested' || row.status === 'open')) {
+      const button = document.createElement('button');
+      button.textContent = action;
+      button.onclick = () => run(button, async () => {
+        await request(target(row.id), {});
+        await refresh();
+      });
+      item.append(button);
+    }
+    return item;
+  }));
+}
+async function refresh() {
+  const data = await (await request('')).json();
+  $('status').textContent = data.bookings.length + ' bookings · ' + data.handoffs.length + ' handoffs';
+  render('booking-list', data.bookings, row =>
+    `${row.name} · ${new Date(row.slot * 1000).toLocaleString()} · ${row.status}`,
+    'Confirm', id => `/bookings/${id}/confirm`);
+  render('handoff-list', data.handoffs, row =>
+    `${row.name} · ${row.email} · ${row.reason} · ${row.status}`,
+    'Resolve', id => `/handoffs/${id}/resolve`);
+}
+async function run(button, operation) {
+  button.disabled = true;
+  try { await operation(); }
+  catch (error) { $('status').textContent = error.message; }
+  finally { button.disabled = false; }
+}
+for (const kind of ['bookings', 'handoffs']) {
+  $(kind).onsubmit = event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    run(event.submitter, async () => {
+      const data = Object.fromEntries(new FormData(form));
+      if (data.slot) data.slot = Math.floor(new Date(data.slot).getTime() / 1000);
+      await request('/' + kind, data);
+      form.reset();
+      await refresh();
+    });
+  };
+}
+$('export').onclick = event => run(event.currentTarget, async () => {
+  const url = URL.createObjectURL(await (await request('/export.csv')).blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'callfreya-crm.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+$('hermes').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  const scenario = new FormData(event.currentTarget).get('scenario');
+  button.disabled = true;
+  $('draft').textContent = 'Waiting for Hermes…';
+  try {
+    const response = await fetch('/api/hermes/draft', {
+      method: 'POST',
+      headers: {'X-FreyaLine-Call': '1', 'Content-Type': 'application/json'},
+      body: JSON.stringify(scenario)
+    });
+    if (!response.ok) throw new Error(await response.text());
+    $('draft').textContent = (await response.json()).draft;
+  } catch (error) {
+    $('draft').textContent = error.message;
+  } finally { button.disabled = false; }
+};
+refresh().catch(error => { $('status').textContent = error.message; });
+</script>
+</body>
+</html>
