@@ -12,9 +12,10 @@ visible in the browser until the next recording or page reload.
 
 ## Source of truth
 
-The authoritative repository is maintained on Nostr through ngit. The
-MurdawkMedia GitHub repository is a distribution mirror. Submit changes
-through the ngit repository.
+The [CallFreya repository on GitWorkshop](https://gitworkshop.dev/npub17j3f7cuhcvjqnf7d80x6rt9hmkkhdguwg4l2th0h4qnhqketr63s6xakwv/relay.ngit.dev/callfreya) is the
+source of truth. Submit changes there through ngit. The
+[MurdawkMedia GitHub repository](https://github.com/murdawkmedia/callfreya)
+is a distribution mirror.
 
 ## Run
 
