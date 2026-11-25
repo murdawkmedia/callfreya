@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>CallFreya</title>
+<style>
+* { box-sizing: border-box }
+body { margin: 0; background: #eeede7; color: #222922; font: 1rem/1.55 system-ui, sans-serif }
+main { max-width: 46rem; margin: 8vh auto; padding: 2rem; background: #fffcf4; border: 1px solid #d0cec3; border-radius: 1rem }
+h1 { margin: 0 }
+h1 img { display: block; width: min(100%, 12rem); height: auto }
+h2 { margin-bottom: .5rem }
+button { padding: .65rem .9rem; border: 1px solid #31504a; border-radius: .4rem; background: #31504a; color: white; font: inherit }
+button:disabled { opacity: .55 }
+.controls { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.25rem 0 }
+audio { width: 100%; display: block }
+li { margin-bottom: .6rem }
+@media (max-width: 48rem) { main { margin: 1rem; padding: 1.25rem } }
+</style>
+</head>
+<body>
+<main>
+<h1><img src="/callfreya-logo.png" alt="CallFreya Business Receptionist" width="1254" height="1254"></h1>
+<p>Run a local voice call and review the transcript and outcome. Upload a reply or record up to 15 seconds.</p>
+<div class="controls">
+<button id="greet">Play greeting</button>
+<button id="record">Record reply</button>
+<button id="stop" disabled>Stop recording</button>
+</div>
+<label for="upload">Or choose a reply audio file</label>
+<input id="upload" type="file" accept="audio/*">
+<p id="status" role="status">Ready</p>
+<audio id="audio" controls aria-label="Freya’s audio"></audio>
+<section id="results" hidden>
+<h2>Call result</h2>
+<p id="outcome"></p>
+<ol id="transcript"></ol>
+</section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let recorder, stream, timer;
+async function request(url, body) {
+  const response = await fetch(url, body ? {method: 'POST', headers: {'X-FreyaLine-Call': '1'}, body} : {});
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+function play(audio) {
+  $('audio').src = audio;
+  $('audio').play().catch(() => {});
+}
+function busy(value) {
+  for (const id of ['greet', 'record', 'upload']) $(id).disabled = value;
+}
+async function submit(blob) {
+  busy(true);
+  $('results').hidden = true;
+  $('status').textContent = 'Transcribing locally…';
+  try {
+    const result = await request('/api/call', blob);
+    $('outcome').textContent = {
+      interested: 'Interested in a demo', declined: 'Declined', needs_review: 'Needs review'
+    }[result.outcome];
+    $('transcript').replaceChildren(...result.transcript.map(turn => {
+      const item = document.createElement('li');
+      item.textContent = `${turn.speaker === 'agent' ? 'Freya' : 'Caller'}: ${turn.text}`;
+      return item;
+    }));
+    $('results').hidden = false;
+    $('status').textContent = 'Call complete.';
+    play(result.audio);
+  } catch (error) {
+    $('status').textContent = error.message;
+  } finally { busy(false); }
+}
+$('greet').onclick = async () => {
+  busy(true);
+  try {
+    const result = await request('/api/greeting');
+    $('status').textContent = result.text;
+    play(result.audio);
+  } catch (error) { $('status').textContent = error.message; }
+  finally { busy(false); }
+};
+$('upload').onchange = () => {
+  const file = $('upload').files[0];
+  $('upload').value = '';
+  if (file) submit(file);
+};
+$('record').onclick = async () => {
+  busy(true);
+  try {
+    $('audio').pause();
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = event => chunks.push(event.data);
+    recorder.onstop = () => {
+      clearTimeout(timer);
+      stream.getTracks().forEach(track => track.stop());
+      $('stop').disabled = true;
+      submit(new Blob(chunks, {type: recorder.mimeType}));
+    };
+    recorder.onerror = () => {
+      clearTimeout(timer);
+      stream.getTracks().forEach(track => track.stop());
+      $('stop').disabled = true;
+      $('status').textContent = 'Recording failed. Please try again.';
+      recorder.onstop = null;
+      busy(false);
+    };
+    recorder.start();
+    $('status').textContent = 'Recording…';
+    $('stop').disabled = false;
+    timer = setTimeout(() => recorder.stop(), 15000);
+  } catch (error) {
+    stream?.getTracks().forEach(track => track.stop());
+    $('status').textContent = error.message;
+    busy(false);
+  }
+};
+$('stop').onclick = () => { if (recorder.state === 'recording') recorder.stop(); };
+</script>
+</body>
+</html>
